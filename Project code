@@ -1,0 +1,151 @@
+import cv2
+import numpy as np
+import mediapipe as mp
+mp_drawing = mp.solutions.drawing_utils
+mp_drawing_styles = mp.solutions.drawing_styles
+mp_hands = mp.solutions.hands
+
+# Define the radius of the ball and the target
+BALL_RADIUS = 15
+TARGET_RADIUS = 30
+MAX_BALL_MOVE_DISTANCE = 50
+MIN_BALL_MOVE_DISTANCE = 5
+def show_final_score(score, image):
+    cv2.putText(image, f"Final Score: {score}", (int(image.shape[1]/2) - 150, int(image.shape[0]/2)), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 0, 255), 5)
+
+def draw_ball(pos, frame):
+    """
+    Draw a ball at the specified position on the frame.
+    """
+    cv2.circle(frame, tuple(pos.astype(np.int32)), BALL_RADIUS, (0, 0, 255), thickness=-1, lineType=cv2.FILLED)
+
+def draw_target(pos, frame):
+    """
+    Draw a target at the specified position on the frame.
+    """
+    cv2.circle(frame, tuple(pos.astype(np.int32)), TARGET_RADIUS, (0, 255, 0), thickness=-1, lineType=cv2.FILLED)
+
+def draw_line(start, end, image):
+    cv2.line(image, (int(start[0]), int(start[1])), (int(end[0]), int(end[1])), (255, 0, 0), 3)
+
+def show_score(score, image):
+    cv2.putText(image, f"Score: {score}", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
+
+def draw_trajectory(start_pos, end_pos, frame):
+    """
+    Draw a trajectory line from the start position to the end position on the frame.
+    """
+    cv2.line(frame, tuple(start_pos.astype(np.int32)), tuple(end_pos.astype(np.int32)), (255, 255, 0), thickness=2, lineType=cv2.LINE_AA)
+
+def show_timer(timer, image):
+    cv2.putText(image, f"Time left: {timer}", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
+
+def main():
+    # For webcam input:
+    cap = cv2.VideoCapture(0)
+    # For video input:
+    # cap = cv2.VideoCapture(video_path)
+
+    # get size of frame in video
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    # initialize ball position and target position
+    ball_pos = np.array([w//2, h//2], dtype=np.float32)
+    target_pos = np.array([np.random.randint(0, w), np.random.randint(0, h)])
+
+    # initialize score and timer
+    score = 0
+    timer = 0
+
+    # set duration of the game to 60 seconds
+    game_duration = 60
+
+    with mp_hands.Hands(
+            model_complexity=0,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5) as hands:
+        # check if successfully get frame from video
+        while cap.isOpened():
+            success, image = cap.read()
+            if not success:
+                print("Ignoring empty camera frame.")
+                # If loading a video, use 'break' instead of 'continue'.
+                continue
+
+            # To improve performance, optionally mark the image as not writeable to
+            # pass by reference.
+            image.flags.writeable = False
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            results = hands.process(image)
+
+            # Draw the hand annotations on the image.
+            image.flags.writeable = True
+            image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+            if results.multi_hand_landmarks:
+                for hand_landmarks in results.multi_hand_landmarks:
+                    mp_drawing.draw_landmarks(
+                        image,
+                        hand_landmarks,
+                        mp_hands.HAND_CONNECTIONS,
+                        mp_drawing_styles.get_default_hand_landmarks_style(),
+                        mp_drawing_styles.get_default_hand_connections_style())
+                # convert output of mediapipe to a 21*3 matrix
+                # hand pose is described by 21 key points
+                # each point's position is described by a 3 dimensional vector (x, y, z)
+                label = np.array([[p.x * w, p.y * h, p.z * w] for p in results.multi_hand_landmarks[0].landmark])
+                # initialize line position
+                line_start = np.array([w // 2, h // 2], dtype=np.float32)
+                line_end = np.array([w // 2, h // 2], dtype=np.float32)
+                # Draw the trajectory of the ball
+                draw_trajectory(ball_pos, target_pos, image)
+
+                # Move the ball in the direction of the index finger tip
+                ball_pos += (label[8,:2] - ball_pos) * 0.2
+
+                # Check if the ball has reached the target
+                if np.linalg.norm(ball_pos - target_pos) < TARGET_RADIUS:
+                    # The ball has reached the target
+                    # Increase the score and generate a new target position
+                    score += 1
+                    target_pos = np.array([np.random.randint(0, w), np.random.randint(0, h)])
+
+                # Draw the ball and target
+                draw_ball(ball_pos, image)
+                draw_target(target_pos, image)
+
+                # Calculate the player's movement vector
+                player_move_vec = label[8,:2] - label[4,:2]
+
+                # Calculate the screen movement vector
+                screen_move_vec = -player_move_vec
+
+                # Move the line in the opposite direction of the player's movement
+                line_start += screen_move_vec
+                line_end += screen_move_vec
+
+                # Draw the line
+                draw_line(line_start, line_end, image)
+
+                # Show the score
+                show_score(score, image)
+
+                # Update the timer
+                timer += 1/60
+
+                # Check if the game is over
+                if timer >= game_duration:
+                    # The game is over
+                    # Show the final score and exit the loop
+                    show_final_score(score, image)
+                    break
+
+            cv2.imshow('Hand Tracking Game', image)
+            if cv2.waitKey(5) & 0xFF == 27:
+                break
+    cap.release()
+    cv2.destroyAllWindows()
+
+
+if __name__ == '__main__':
+    main()
